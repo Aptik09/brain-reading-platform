@@ -157,10 +157,109 @@
             transition: all 0.3s ease;
         }
         .btn-read:hover { background: rgba(79, 172, 254, 0.4); }
+        
+        /* Reading View Styles */
+        .reading-view {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(15, 12, 41, 0.98);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        .reading-view.active { display: block; }
+        .reading-header {
+            position: sticky;
+            top: 0;
+            background: rgba(15, 12, 41, 0.95);
+            padding: 20px;
+            border-bottom: 2px solid rgba(79, 172, 254, 0.3);
+            backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+        }
+        .reading-title {
+            font-size: 1.5rem;
+            color: #4facfe;
+            flex: 1;
+        }
+        .reading-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        .reading-timer {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            color: #00f2fe;
+        }
+        .btn-close {
+            background: rgba(255, 59, 48, 0.8);
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-complete {
+            background: linear-gradient(45deg, #34c759, #30d158);
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .reading-content {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            line-height: 1.8;
+            font-size: 1.1rem;
+        }
+        .reading-content h1, .reading-content h2 {
+            color: #4facfe;
+            margin: 30px 0 15px 0;
+        }
+        .reading-content p {
+            margin-bottom: 20px;
+        }
+        .reading-content a {
+            color: #00f2fe;
+            text-decoration: none;
+        }
+        .reading-content img {
+            max-width: 100%;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .pdf-viewer {
+            width: 100%;
+            height: calc(100vh - 100px);
+            border: none;
+            border-radius: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            font-size: 1.2rem;
+            color: #4facfe;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" id="mainView">
         <header>
             <h1>🧠 Brain Level Reading Platform</h1>
             <div class="stats-bar">
@@ -206,12 +305,12 @@
         <div class="input-section">
             <h2>Add Content to Read</h2>
             <div class="input-group">
-                <input type="text" id="articleUrl" placeholder="Paste article URL here..." />
+                <input type="text" id="articleUrl" placeholder="Paste article URL here (e.g., Medium, Wikipedia, blogs)..." />
                 <button onclick="addArticle()" class="btn-primary">Add Article</button>
             </div>
             <div class="input-group">
-                <input type="file" id="pdfUpload" accept=".pdf,.txt,.epub" />
-                <button onclick="uploadDocument()" class="btn-primary">Upload Document</button>
+                <input type="file" id="pdfUpload" accept=".pdf" />
+                <button onclick="uploadDocument()" class="btn-primary">Upload PDF</button>
             </div>
         </div>
 
@@ -221,9 +320,28 @@
         </div>
     </div>
 
+    <!-- Reading View -->
+    <div class="reading-view" id="readingView">
+        <div class="reading-header">
+            <div class="reading-title" id="readingTitle"></div>
+            <div class="reading-controls">
+                <div class="reading-timer" id="readingTimer">⏱️ 0:00</div>
+                <button class="btn-complete" onclick="completeReading()">✅ Mark Complete</button>
+                <button class="btn-close" onclick="closeReading()">✕ Close</button>
+            </div>
+        </div>
+        <div class="reading-content" id="readingContent">
+            <div class="loading">Loading content...</div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
         let userProgress = { level: 1, neurons: 0, totalReadingTime: 0, articlesRead: 0 };
         let readingQueue = [];
+        let currentReading = null;
+        let readingStartTime = null;
+        let timerInterval = null;
 
         function loadProgress() {
             const saved = localStorage.getItem('brainLevelProgress');
@@ -264,6 +382,7 @@
                 id: Date.now().toString(),
                 title: extractTitleFromUrl(url),
                 url: url,
+                type: 'article',
                 wordCount: wordCount,
                 readingTime: readingTime,
                 neuronImpact: neuronImpact,
@@ -283,25 +402,31 @@
             const file = fileInput.files?.[0];
             if (!file) { alert('Please select a file'); return; }
             
-            const wordCount = Math.floor(Math.random() * 5000) + 1000;
-            const readingTime = calculateReadingTime(wordCount);
-            const neuronImpact = calculateNeuronImpact(wordCount);
-            
-            const item = {
-                id: Date.now().toString(),
-                title: file.name,
-                wordCount: wordCount,
-                readingTime: readingTime,
-                neuronImpact: neuronImpact,
-                progress: 0,
-                completed: false
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const wordCount = Math.floor(Math.random() * 5000) + 1000;
+                const readingTime = calculateReadingTime(wordCount);
+                const neuronImpact = calculateNeuronImpact(wordCount);
+                
+                const item = {
+                    id: Date.now().toString(),
+                    title: file.name,
+                    type: 'pdf',
+                    pdfData: e.target.result,
+                    wordCount: wordCount,
+                    readingTime: readingTime,
+                    neuronImpact: neuronImpact,
+                    progress: 0,
+                    completed: false
+                };
+                
+                readingQueue.push(item);
+                saveProgress();
+                renderReadingQueue();
+                fileInput.value = '';
+                showNotification(`PDF uploaded! 📄 ${readingTime} min read`);
             };
-            
-            readingQueue.push(item);
-            saveProgress();
-            renderReadingQueue();
-            fileInput.value = '';
-            showNotification(`Document uploaded! 📄 ${readingTime} min read`);
+            reader.readAsDataURL(file);
         }
 
         function extractTitleFromUrl(url) {
@@ -331,6 +456,7 @@
                         <span>⏱️ ${item.readingTime} min</span>
                         <span>📊 ${item.wordCount.toLocaleString()} words</span>
                         <span>🧠 +${item.neuronImpact} neurons</span>
+                        <span>${item.type === 'pdf' ? '📄 PDF' : '🌐 Article'}</span>
                     </div>
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: ${item.progress}%"></div>
@@ -345,19 +471,92 @@
         function startReading(itemId) {
             const item = readingQueue.find(i => i.id === itemId);
             if (!item) return;
-            if (item.completed) { showNotification('Already completed! 🎉'); return; }
             
-            item.progress = 100;
-            item.completed = true;
-            userProgress.neurons += item.neuronImpact;
-            userProgress.totalReadingTime += item.readingTime;
+            currentReading = item;
+            readingStartTime = Date.now();
+            
+            document.getElementById('readingView').classList.add('active');
+            document.getElementById('mainView').style.display = 'none';
+            document.getElementById('readingTitle').textContent = item.title;
+            
+            startTimer();
+            
+            if (item.type === 'pdf') {
+                displayPDF(item);
+            } else {
+                displayArticle(item);
+            }
+        }
+
+        function displayPDF(item) {
+            const content = document.getElementById('readingContent');
+            content.innerHTML = `<iframe class="pdf-viewer" src="${item.pdfData}"></iframe>`;
+        }
+
+        function displayArticle(item) {
+            const content = document.getElementById('readingContent');
+            content.innerHTML = `
+                <div class="loading">Loading article from ${item.url}...</div>
+                <p style="margin-top: 20px; opacity: 0.7;">
+                    <strong>Note:</strong> Due to browser security restrictions, we can't directly load external websites. 
+                    You can either:
+                </p>
+                <ul style="margin: 20px 0; opacity: 0.7;">
+                    <li>Open the article in a new tab: <a href="${item.url}" target="_blank">${item.url}</a></li>
+                    <li>Copy and paste the article text below</li>
+                </ul>
+                <textarea id="articleText" style="width: 100%; min-height: 400px; padding: 20px; background: rgba(255,255,255,0.1); border: 2px solid rgba(79, 172, 254, 0.3); border-radius: 10px; color: #fff; font-size: 1.1rem; line-height: 1.8;" placeholder="Paste article content here to read..."></textarea>
+                <button onclick="loadPastedContent()" style="margin-top: 20px; padding: 15px 30px; background: linear-gradient(45deg, #4facfe, #00f2fe); border: none; border-radius: 10px; color: #fff; font-weight: bold; cursor: pointer;">Load Content</button>
+            `;
+        }
+
+        function loadPastedContent() {
+            const text = document.getElementById('articleText').value;
+            if (!text) {
+                alert('Please paste some content first');
+                return;
+            }
+            
+            const content = document.getElementById('readingContent');
+            content.innerHTML = `<div style="white-space: pre-wrap;">${text}</div>`;
+        }
+
+        function startTimer() {
+            let seconds = 0;
+            timerInterval = setInterval(() => {
+                seconds++;
+                const mins = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                document.getElementById('readingTimer').textContent = 
+                    `⏱️ ${mins}:${secs.toString().padStart(2, '0')}`;
+            }, 1000);
+        }
+
+        function closeReading() {
+            if (timerInterval) clearInterval(timerInterval);
+            document.getElementById('readingView').classList.remove('active');
+            document.getElementById('mainView').style.display = 'block';
+            currentReading = null;
+        }
+
+        function completeReading() {
+            if (!currentReading) return;
+            
+            const timeSpent = Math.floor((Date.now() - readingStartTime) / 60000);
+            
+            currentReading.progress = 100;
+            currentReading.completed = true;
+            userProgress.neurons += currentReading.neuronImpact;
+            userProgress.totalReadingTime += timeSpent;
             userProgress.articlesRead += 1;
             
             checkLevelUp();
             saveProgress();
             updateUI();
             renderReadingQueue();
-            showNotification(`🎉 Article completed! +${item.neuronImpact} neurons`);
+            
+            showNotification(`🎉 Reading completed! +${currentReading.neuronImpact} neurons`);
+            closeReading();
         }
 
         function checkLevelUp() {
@@ -396,7 +595,7 @@
                 position: fixed; top: 20px; right: 20px;
                 background: linear-gradient(45deg, #4facfe, #00f2fe);
                 color: white; padding: 15px 25px; border-radius: 10px;
-                box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4); z-index: 1000;
+                box-shadow: 0 5px 20px rgba(79, 172, 254, 0.4); z-index: 10000;
             `;
             notification.textContent = message;
             document.body.appendChild(notification);
